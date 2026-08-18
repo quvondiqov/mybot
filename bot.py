@@ -7,7 +7,7 @@ from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 
-BOT_TOKEN = "BOT_TOKENINI_SHUYERGA_YOZING"
+BOT_TOKEN = "8981242781:AAEm3VckbN5yUziuUEUSw7Rhmov75hSiprk"
 ADMIN_ID = 8914547953  # Sizning Telegram ID raqamingiz
 TAPS_USERNAME = "topkinone"
 
