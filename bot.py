@@ -16,10 +16,9 @@ TAPS_USERNAME = "topkinone"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Anketalar bazasi - TO'LIQ BO'SH
+# Anketalar bazasi
 profiles = []
 
-# Admin va User holatlari
 class AddProfile(StatesGroup):
     photo = State()
     name = State()
@@ -75,7 +74,11 @@ async def handle_dislike(call: types.CallbackQuery, state: FSMContext):
     data = await state.get_data()
     index = data.get("index", 0) + 1
     
-    await call.message.delete()
+    try:
+        await call.message.delete()
+    except Exception:
+        pass
+
     if index < len(profiles):
         await state.update_data(index=index)
         await show_profile(call.message.chat.id, index, state)
@@ -124,10 +127,10 @@ async def receive_receipt(message: types.Message, state: FSMContext):
     index = data.get("target_index", 0)
     
     if not profiles or index >= len(profiles):
-        await message.answer("⚠️ Profil topilmadi. Qaytadan urinib ko'ring.")
-        return
+        profile = {"name": "Noma'lum profil", "city": "Noma'lum"}
+    else:
+        profile = profiles[index]
 
-    profile = profiles[index]
     photo_id = message.photo[-1].file_id
     
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
@@ -162,14 +165,20 @@ async def approve_payment(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
         
-    _, user_id, index = call.data.split("_")
-    idx = int(index)
+    parts = call.data.split("_")
+    user_id = int(parts[1])
+    idx = int(parts[2])
     
     if idx < len(profiles):
         profile = profiles[idx]
         await bot.send_message(
-            chat_id=int(user_id),
+            chat_id=user_id,
             text=f"✅ To'lovingiz tasdiqlandi!\n\n✨ **{profile['name']}** bilan bog'lanish uchun kontakt: {profile['contact']}"
+        )
+    else:
+        await bot.send_message(
+            chat_id=user_id,
+            text="✅ To'lovingiz tasdiqlandi! Adminga bog'laning."
         )
     
     await call.message.edit_caption(caption=call.message.caption + "\n\n✅ **TASDIQLANDI**")
@@ -180,20 +189,22 @@ async def reject_payment(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
         
-    user_id = call.data.split("_")[1]
+    user_id = int(call.data.split("_")[1])
     
     await bot.send_message(
-        chat_id=int(user_id),
+        chat_id=user_id,
         text="❌ To'lovingiz tasdiqlanmadi. Chek rasmini tekshirib qayta yuboring."
     )
     
     await call.message.edit_caption(caption=call.message.caption + "\n\n❌ **RAD ETILDI**")
     await call.answer("To'lov rad etildi.")
 
-# --- ADMIN ANKETA QO'SHISH VA O'CHIRISH ---
+# --- ADMIN BUYRUQLARI (/add, /list, /del) ---
 
-@dp.message(Command("add"), F.from_user.id == ADMIN_ID)
+@dp.message(Command("add"))
 async def add_start(message: types.Message, state: FSMContext):
+    if message.from_user.id != ADMIN_ID:
+        return
     await state.set_state(AddProfile.photo)
     await message.answer("📸 Yangi anketa uchun rasm yuboring:")
 
@@ -235,8 +246,11 @@ async def add_contact(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Yangi anketa muvaffaqiyatli saqlandi!")
 
-@dp.message(Command("list"), F.from_user.id == ADMIN_ID)
+@dp.message(Command("list"))
 async def list_profiles(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+        
     if not profiles:
         await message.answer("📁 Hozircha anketalar bazasi bo'sh.")
         return
@@ -245,13 +259,21 @@ async def list_profiles(message: types.Message):
     for p in profiles:
         text += f"🆔 **ID: {p['id']}** | {p['name']}, {p['age']} yosh ({p['city']})\n"
     
-    text += "\n🗑 O'chirish uchun buyruq: `/del ID` (masalan: `/del 1`)"
+    text += "\n🗑 O'chirish uchun buyruq: `/del 1` (ID raqamini yozing)"
     await message.answer(text, parse_mode="Markdown")
 
-@dp.message(Command("del"), F.from_user.id == ADMIN_ID)
+@dp.message(Command("del"))
 async def delete_profile(message: types.Message):
+    if message.from_user.id != ADMIN_ID:
+        return
+        
     try:
-        profile_id = int(message.text.split()[1])
+        args = message.text.split()
+        if len(args) < 2:
+            await message.answer("⚠️ O'chirish uchun ID yozing. Masalan: `/del 1`", parse_mode="Markdown")
+            return
+            
+        profile_id = int(args[1])
         global profiles
         initial_len = len(profiles)
         profiles = [p for p in profiles if p["id"] != profile_id]
@@ -260,8 +282,8 @@ async def delete_profile(message: types.Message):
             await message.answer(f"✅ **ID: {profile_id}** bo'lgan anketa muvaffaqiyatli o'chirildi!")
         else:
             await message.answer(f"❌ **ID: {profile_id}** topilmadi.")
-    except (IndexError, ValueError):
-        await message.answer("⚠️ Noto'g'ri format! O'chirish uchun masalan `/del 1` deb yuboring.")
+    except Exception as e:
+        await message.answer(f"⚠️ Xatolik yuz berdi: {str(e)}")
 
 # --- WEB SERVER & POLLING ---
 
