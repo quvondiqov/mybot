@@ -1,142 +1,245 @@
-import logging
 import asyncio
-from aiogram import Bot, Dispatcher, types, F
+import logging
+from aiogram import Bot, Dispatcher, F, types
+from aiogram.filters import CommandStart, Command
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.fsm.storage.memory import MemoryStorage
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
-from aiogram.filters import CommandStart
 
-# --- SOZLAMALAR ---
-BOT_TOKEN = "8981242781:AAEm3VckbN5yUziuUEUSw7Rhmov75hSiprk"  # BotFather'dan olingan token
-ADMIN_ID = 8914547953              # O'zingizning Telegram ID'ingiz
-TAPS_USERNAME = "topkinone"        # Taps.uz nik nomingiz
+BOT_TOKEN = "BOT_TOKENINI_SHUYERGA_YOZING"
+ADMIN_ID = 8914547953  # Sizning Telegram ID raqamingiz
+TAPS_USERNAME = "topkinone"
 
-logging.basicConfig(level=logging.INFO)
 bot = Bot(token=BOT_TOKEN)
-dp = Dispatcher()
+dp = Dispatcher(storage=MemoryStorage())
 
-# === ASOSIY BITTANING AKKAUNTI (Hamma profillar uchun bitta kontakt beriladi) ===
-MAIN_CONTACT = "@qaysarcha_ool"  # O'zingiz ochgan akkaunt username'i
+# Soxta anketalar bazasi
+profiles = [
+    {
+        "id": 1,
+        "photo": "https://picsum.photos/400/500",
+        "name": "Madina",
+        "age": 21,
+        "city": "Toshkent",
+        "contact": "@qaysarcha_ool"
+    },
+    {
+        "id": 2,
+        "photo": "https://picsum.photos/401/500",
+        "name": "Sevinch",
+        "age": 23,
+        "city": "Samarqand",
+        "contact": "@qaysarcha_ool"
+    }
+]
 
-# === KO'PAYTIRILGAN QIZLAR RO'YXATI (12 ta profil) ===
-GIRLS_DATA = {
-    1001: {"name": "Madina, 21 (Toshkent)", "contact": MAIN_CONTACT},
-    1002: {"name": "Sevinch, 23 (Samarqand)", "contact": MAIN_CONTACT},
-    1003: {"name": "Rayhon, 20 (Farg'ona)", "contact": MAIN_CONTACT},
-    1004: {"name": "Laylo, 22 (Toshkent)", "contact": MAIN_CONTACT},
-    1005: {"name": "Diyora, 19 (Andijon)", "contact": MAIN_CONTACT},
-    1006: {"name": "Shaxzoda, 21 (Buxoro)", "contact": MAIN_CONTACT},
-    1007: {"name": "Nigora, 24 (Toshkent)", "contact": MAIN_CONTACT},
-    1008: {"name": "Asal, 20 (Namangan)", "contact": MAIN_CONTACT},
-    1009: {"name": "Kamola, 22 (Qarshi)", "contact": MAIN_CONTACT},
-    1010: {"name": "Zilola, 23 (Toshkent)", "contact": MAIN_CONTACT},
-    1011: {"name": "Guli, 21 (Urganch)", "contact": MAIN_CONTACT},
-    1012: {"name": "Lola, 20 (Jizzax)", "contact": MAIN_CONTACT},
-}
+# Admin va User holatlari
+class AddProfile(StatesGroup):
+    photo = State()
+    name = State()
+    age = State()
+    city = State()
+    contact = State()
+
+class UserState(StatesGroup):
+    view_index = State()
+    waiting_receipt = State()
+
+# --- USER QISMI ---
 
 @dp.message(CommandStart())
-async def start_cmd(message: types.Message):
-    # Anketalarni tugmacha shaklida chiqarish
-    buttons = []
-    for g_id, g_info in GIRLS_DATA.items():
-        buttons.append([
-            InlineKeyboardButton(
-                text=f"✨ {g_info['name']} — (15,000 so'm)", 
-                callback_data=f"buy_{g_id}"
-            )
-        ])
+async def start_cmd(message: types.Message, state: FSMContext):
+    if not profiles:
+        await message.answer("Hozircha anketalar yo'q.")
+        return
     
-    kb = InlineKeyboardMarkup(inline_keyboard=buttons)
-    await message.answer(
-        "👋 **Xush kelibsiz!**\n\n"
-        "Tanishish uchun o'zingizga yoqqan nomzodni tanlang va kontaktini oling:", 
-        reply_markup=kb, 
-        parse_mode="Markdown"
-    )
+    await state.set_state(UserState.view_index)
+    await state.update_data(index=0)
+    await show_profile(message.chat.id, 0, state)
 
-@dp.callback_query(F.data.startswith("buy_"))
-async def buy_profile(callback: types.CallbackQuery):
-    girl_id = int(callback.data.split("_")[1])
-    user_id = callback.from_user.id
-    girl = GIRLS_DATA.get(girl_id)
+async def show_profile(chat_id: int, index: int, state: FSMContext):
+    profile = profiles[index]
     
-    amount = 15000
-    comment = f"UNLOCK_{user_id}_{girl_id}"
-    taps_link = f"https://taps.uz/{TAPS_USERNAME}?amount={amount}&comment={comment}"
+    caption = (
+        f"✨ **{profile['name']}**, {profile['age']} yosh\n"
+        f"📍 **Shahar:** {profile['city']}\n"
+    )
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
-        [InlineKeyboardButton(text="💳 15,000 so'm to'lash (Taps.uz)", url=taps_link)],
-        [InlineKeyboardButton(text="✅ To'lov qildim (Tekshirish)", callback_data=f"check_{girl_id}")],
-        [InlineKeyboardButton(text="⬅️ Bosh sahifa", callback_data="back")]
+        [
+            InlineKeyboardButton(text="❤️ Like", callback_data=f"like_{index}"),
+            InlineKeyboardButton(text="💔 Dislike", callback_data=f"dislike_{index}")
+        ]
+    ])
+
+    await bot.send_photo(
+        chat_id=chat_id,
+        photo=profile["photo"],
+        caption=caption,
+        parse_mode="Markdown",
+        reply_markup=kb
+    )
+
+@dp.callback_query(F.data.startswith("dislike_"))
+async def handle_dislike(call: types.CallbackQuery, state: FSMContext):
+    data = await state.get_data()
+    index = data.get("index", 0) + 1
+    
+    if index < len(profiles):
+        await state.update_data(index=index)
+        await call.message.delete()
+        await show_profile(call.message.chat.id, index, state)
+    else:
+        await call.message.delete()
+        await call.message.answer("🎉 Barcha anketalar tugadi!")
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("like_"))
+async def handle_like(call: types.CallbackQuery, state: FSMContext):
+    index = int(call.data.split("_")[1])
+    profile = profiles[index]
+    
+    pay_link = f"https://taps.uz/{TAPS_USERNAME}?amount=15000&comment=Profile_{profile['id']}"
+    
+    kb = InlineKeyboardMarkup(inline_keyboard=[
+        [InlineKeyboardButton(text="💳 15 000 so'm to'lov qilish", url=pay_link)],
+        [InlineKeyboardButton(text="🧾 Chek yuborish", callback_data=f"send_receipt_{index}")]
     ])
     
     text = (
-        f"👤 **Tanlangan profil:** {girl['name']}\n"
-        f"💰 **Profilni ochish narxi:** 15,000 so'm\n\n"
-        f"📌 *Yo'riqnoma:* Taps.uz orqali to'lovni bajarib, **'To'lov qildim'** tugmasini bosing."
-    )
-    await callback.message.edit_text(text, reply_markup=kb, parse_mode="Markdown")
-
-@dp.callback_query(F.data == "back")
-async def back_to_main(callback: types.CallbackQuery):
-    await callback.message.delete()
-    await start_cmd(callback.message)
-
-@dp.callback_query(F.data.startswith("check_"))
-async def check_payment(callback: types.CallbackQuery):
-    girl_id = int(callback.data.split("_")[1])
-    user = callback.from_user
-    
-    await callback.message.answer(
-        "⏳ **So'rovingiz adminga yuborildi.**\n"
-        "To'lov tekshirilgach, kontakt 1-5 daqiqada ochiladi.",
-        parse_mode="Markdown"
+        f"❤️ **So'rovingiz {profile['name']}ga yuborildi!**\n\n"
+        f"Agar u ham rasmingizga like bossa, uning akkaunti sizga tekinga ko'rinadi.\n\n"
+        f"⚡️ *Akkauntni hoziroq ko'rishni istasangiz, 15 000 so'm to'lov qilishingiz mumkin:* "
     )
     
-    kb_admin = InlineKeyboardMarkup(inline_keyboard=[
+    await call.message.answer(text, parse_mode="Markdown", reply_markup=kb)
+    await call.answer()
+
+@dp.callback_query(F.data.startswith("send_receipt_"))
+async def start_receipt_upload(call: types.CallbackQuery, state: FSMContext):
+    index = int(call.data.split("_")[1])
+    await state.update_data(target_index=index)
+    await state.set_state(UserState.waiting_receipt)
+    
+    await call.message.answer("📸 Iltimos, to'lov cheki (skrinshot/rasm)ni yuboring:")
+    await call.answer()
+
+@dp.message(UserState.waiting_receipt, F.photo)
+async def receive_receipt(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    index = data.get("target_index", 0)
+    profile = profiles[index]
+    
+    photo_id = message.photo[-1].file_id
+    
+    # Admin uchun tasdiqlash tugmalari
+    admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Tasdiqlash (Ochish)", callback_data=f"approve_{user.id}_{girl_id}"),
-            InlineKeyboardButton(text="❌ Rad etish", callback_data=f"decline_{user.id}")
+            InlineKeyboardButton(text="✅ Tasdiqlash (Ochish)", callback_data=f"approve_{message.from_user.id}_{index}"),
+            InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_{message.from_user.id}")
         ]
     ])
     
-    admin_text = (
-        f"💳 **Yangi to'lov so'rovi!**\n\n"
-        f"👤 **Foydalanuvchi:** {user.full_name} (@{user.username})\n"
-        f"🆔 **User ID:** `{user.id}`\n"
-        f"🎯 **Tanlangan profil ID:** `{girl_id}`\n"
-        f"💰 **Summa:** 15,000 so'm\n\n"
-        f"Taps.uz hisobingizni tekshirib tasdiqlang:"
+    user_info = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
+    
+    await bot.send_photo(
+        chat_id=ADMIN_ID,
+        photo=photo_id,
+        caption=(
+            f"📥 **Yangi to'lov cheki!**\n\n"
+            f"👤 **Foydalanuvchi:** {user_info}\n"
+            f"🎯 **Tanlangan profil:** {profile['name']} ({profile['city']})\n"
+            f"💰 **Summa:** 15 000 so'm"
+        ),
+        parse_mode="Markdown",
+        reply_markup=admin_kb
     )
     
-    await bot.send_message(chat_id=ADMIN_ID, text=admin_text, reply_markup=kb_admin, parse_mode="Markdown")
-    await callback.answer()
+    await state.set_state(UserState.view_index)
+    await message.answer("⏳ Chekingiz adminga yuborildi. To'lov tasdiqlangach, kontakt 1-5 daqiqada sizga yuboriladi.")
+
+# --- ADMIN TASDIQLASH QISMI ---
 
 @dp.callback_query(F.data.startswith("approve_"))
-async def approve_payment(callback: types.CallbackQuery):
-    _, user_id, girl_id = callback.data.split("_")
-    user_id, girl_id = int(user_id), int(girl_id)
+async def approve_payment(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+        
+    _, user_id, index = call.data.split("_")
+    profile = profiles[int(index)]
     
-    girl = GIRLS_DATA.get(girl_id, {"name": "Profil", "contact": MAIN_CONTACT})
-    
-    # Foydalanuvchiga kontakt yuboriladi
+    # Userga kontaktni yuborish
     await bot.send_message(
-        chat_id=user_id,
-        text=f"🎉 **To'lovingiz tasdiqlandi!**\n\nSiz tanlagan profil: **{girl['name']}**\nTelegram kontakti: {girl['contact']}\n\nBezorilik qilmasdan, xushfe'llik bilan muloqot qilishingizni so'raymiz!",
-        parse_mode="Markdown"
+        chat_id=int(user_id),
+        text=f"✅ To'lovingiz tasdiqlandi!\n\n✨ **{profile['name']}** bilan bog'lanish uchun kontakt: {profile['contact']}"
     )
     
-    await callback.message.edit_text(f"✅ ID {user_id} uchun to'lov tasdiqlandi va profil ochib berildi!")
+    await call.message.edit_caption(caption=call.message.caption + "\n\n✅ **TASDIQLANDI**")
+    await call.answer("Kontakt foydalanuvchiga yuborildi!")
 
-@dp.callback_query(F.data.startswith("decline_"))
-async def decline_payment(callback: types.CallbackQuery):
-    user_id = int(callback.data.split("_")[1])
+@dp.callback_query(F.data.startswith("reject_"))
+async def reject_payment(call: types.CallbackQuery):
+    if call.from_user.id != ADMIN_ID:
+        return
+        
+    user_id = call.data.split("_")[1]
     
     await bot.send_message(
-        chat_id=user_id,
-        text="❌ **To'lovingiz tasdiqlanmadi.**\nTaps.uz hisobiga to'lov tushgani aniqlanmadi."
+        chat_id=int(user_id),
+        text="❌ To'lovingiz tasdiqlanmadi. Chek rasmini tekshirib qayta yuboring."
     )
-    await callback.message.edit_text(f"❌ ID {user_id} so'rovi rad etildi.")
+    
+    await call.message.edit_caption(caption=call.message.caption + "\n\n❌ **RAD ETILDI**")
+    await call.answer("To'lov rad etildi.")
+
+# --- ADMIN SOXTA ANKETA QO'SHISH (/add) ---
+
+@dp.message(Command("add"), F.from_user.id == ADMIN_ID)
+async def add_start(message: types.Message, state: FSMContext):
+    await state.set_state(AddProfile.photo)
+    await message.answer("📸 Yangi anketa uchun rasm yuboring:")
+
+@dp.message(AddProfile.photo, F.photo)
+async def add_photo(message: types.Message, state: FSMContext):
+    await state.update_data(photo=message.photo[-1].file_id)
+    await state.set_state(AddProfile.name)
+    await message.answer("✍️ Ismini kiriting:")
+
+@dp.message(AddProfile.name)
+async def add_name(message: types.Message, state: FSMContext):
+    await state.update_data(name=message.text)
+    await state.set_state(AddProfile.age)
+    await message.answer("🔢 Yoshini kiriting:")
+
+@dp.message(AddProfile.age)
+async def add_age(message: types.Message, state: FSMContext):
+    await state.update_data(age=message.text)
+    await state.set_state(AddProfile.city)
+    await message.answer("📍 Viloyat/Shaharni kiriting:")
+
+@dp.message(AddProfile.city)
+async def add_city(message: types.Message, state: FSMContext):
+    await state.update_data(city=message.text)
+    await state.set_state(AddProfile.contact)
+    await message.answer("🔗 Kontaktni kiriting (masalan: @qaysarcha_ool):")
+
+@dp.message(AddProfile.contact)
+async def add_contact(message: types.Message, state: FSMContext):
+    data = await state.get_data()
+    profiles.append({
+        "id": len(profiles) + 1,
+        "photo": data["photo"],
+        "name": data["name"],
+        "age": data["age"],
+        "city": data["city"],
+        "contact": message.text
+    })
+    await state.clear()
+    await message.answer("✅ Yangi anketa saqlandi!")
 
 async def main():
+    logging.basicConfig(level=logging.INFO)
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
