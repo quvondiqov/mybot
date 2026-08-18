@@ -238,8 +238,29 @@ async def add_contact(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("✅ Yangi anketa saqlandi!")
 
+from aiohttp import web
+
+# UptimeRobot so'rov yuborganda 200 OK qaytaradigan oddiy sahifa
+async def handle_ping(request):
+    return web.Response(text="Bot is running!")
+
 async def main():
     logging.basicConfig(level=logging.INFO)
+    
+    # Kichik Web serverni ishga tushirish (Render porti uchun)
+    app = web.Application()
+    app.router.add_get("/", handle_ping)
+    
+    runner = web.AppRunner(app)
+    await runner.setup()
+    
+    # Render avtomatik ajratadigan PORT ni olish
+    import os
+    port = int(os.environ.get("PORT", 8080))
+    site = web.TCPSite(runner, "0.0.0.0", port)
+    await site.start()
+    
+    # Telegram Bot Polling
     await dp.start_polling(bot)
 
 if __name__ == "__main__":
