@@ -3,7 +3,7 @@ import logging
 import os
 from aiohttp import web
 from aiogram import Bot, Dispatcher, F, types
-from aiogram.filters import CommandStart, Command
+from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
@@ -27,18 +27,23 @@ class AddProfile(StatesGroup):
     contact = State()
 
 class UserState(StatesGroup):
-    view_index = State()
     waiting_receipt = State()
+
+# --- ADMIN BEKOR QILISH BUYRUG'I ---
+@dp.message(Command("cancel"))
+async def cancel_handler(message: types.Message, state: FSMContext):
+    await state.clear()
+    await message.answer("❌ Amaliyot bekor qilindi.")
 
 # --- USER QISMI ---
 
 @dp.message(CommandStart())
 async def start_cmd(message: types.Message, state: FSMContext):
+    await state.clear()
     if not profiles:
-        await message.answer("⚠️ Hozircha hech qanday anketa mavjud emas. Boshqa vaqtroq kirib ko'ring!")
+        await message.answer("⚠️ Hozircha hech qanday anketa mavjud emas.")
         return
     
-    await state.set_state(UserState.view_index)
     await state.update_data(index=0)
     await show_profile(message.chat.id, 0, state)
 
@@ -89,18 +94,17 @@ async def handle_dislike(call: types.CallbackQuery, state: FSMContext):
 @dp.callback_query(F.data.startswith("like_"))
 async def handle_like(call: types.CallbackQuery, state: FSMContext):
     index = int(call.data.split("_")[1])
-    await state.update_data(target_index=index)
     
     if index >= len(profiles):
-        await call.answer("Xatolik: ushbu profil topilmadi.", show_alert=True)
+        await call.answer("Profil topilmadi.", show_alert=True)
         return
 
     profile = profiles[index]
-    pay_link = f"https://taps.uz/{TAPS_USERNAME}?amount=15000&comment=Profile_{profile['id']}"
+    pay_link = f"https://taps.uz/{TAPS_USERNAME}?amount=15000"
     
     kb = InlineKeyboardMarkup(inline_keyboard=[
         [InlineKeyboardButton(text="💳 15 000 so'm to'lov qilish", url=pay_link)],
-        [InlineKeyboardButton(text="🧾 Chek yuborish", callback_data=f"send_receipt_{index}")]
+        [InlineKeyboardButton(text="🧾 Chek yuborish", callback_data="send_receipt")]
     ])
     
     text = (
@@ -112,30 +116,20 @@ async def handle_like(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer(text, parse_mode="Markdown", reply_markup=kb)
     await call.answer()
 
-@dp.callback_query(F.data.startswith("send_receipt_"))
+@dp.callback_query(F.data == "send_receipt")
 async def start_receipt_upload(call: types.CallbackQuery, state: FSMContext):
-    index = int(call.data.split("_")[1])
-    await state.update_data(target_index=index)
     await state.set_state(UserState.waiting_receipt)
-    
-    await call.message.answer("📸 Iltimos, to'lov cheki (skrinshot/rasm)ni yuboring:")
+    await call.message.answer("📸 To'lov cheki (skrinshot/rasm)ni yuboring:")
     await call.answer()
 
+# SODDALASHTIRILGAN CHEK QABUL QILISH
 @dp.message(UserState.waiting_receipt, F.photo)
 async def receive_receipt(message: types.Message, state: FSMContext):
-    data = await state.get_data()
-    index = data.get("target_index", 0)
-    
-    if not profiles or index >= len(profiles):
-        profile = {"name": "Noma'lum profil", "city": "Noma'lum"}
-    else:
-        profile = profiles[index]
-
     photo_id = message.photo[-1].file_id
     
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
-            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_{message.from_user.id}_{index}"),
+            InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_{message.from_user.id}"),
             InlineKeyboardButton(text="❌ Rad etish", callback_data=f"reject_{message.from_user.id}")
         ]
     ])
@@ -146,17 +140,16 @@ async def receive_receipt(message: types.Message, state: FSMContext):
         chat_id=ADMIN_ID,
         photo=photo_id,
         caption=(
-            f"📥 **Yangi to'lov cheki!**\n\n"
+            f"📥 **Yangi to'lov cheki keldi!**\n\n"
             f"👤 **Foydalanuvchi:** {user_info}\n"
-            f"🎯 **Tanlangan profil:** {profile['name']} ({profile['city']})\n"
             f"💰 **Summa:** 15 000 so'm"
         ),
         parse_mode="Markdown",
         reply_markup=admin_kb
     )
     
-    await state.set_state(UserState.view_index)
-    await message.answer("⏳ Chekingiz adminga yuborildi. To'lov tasdiqlangach, kontakt 1-5 daqiqada sizga yuboriladi.")
+    await state.clear()
+    await message.answer("⏳ Chekingiz adminga yuborildi. Muvaffaqiyatli tekshirilsa, admin sizga kontaktni yuboradi.")
 
 # --- ADMIN TASDIQLASH QISMI ---
 
@@ -165,24 +158,15 @@ async def approve_payment(call: types.CallbackQuery):
     if call.from_user.id != ADMIN_ID:
         return
         
-    parts = call.data.split("_")
-    user_id = int(parts[1])
-    idx = int(parts[2])
+    user_id = int(call.data.split("_")[1])
     
-    if idx < len(profiles):
-        profile = profiles[idx]
-        await bot.send_message(
-            chat_id=user_id,
-            text=f"✅ To'lovingiz tasdiqlandi!\n\n✨ **{profile['name']}** bilan bog'lanish uchun kontakt: {profile['contact']}"
-        )
-    else:
-        await bot.send_message(
-            chat_id=user_id,
-            text="✅ To'lovingiz tasdiqlandi! Adminga bog'laning."
-        )
+    await bot.send_message(
+        chat_id=user_id,
+        text="✅ To'lovingiz tasdiqlandi! Admin siz bilan tez orada bog'lanadi yoki kontaktni yuboradi."
+    )
     
     await call.message.edit_caption(caption=call.message.caption + "\n\n✅ **TASDIQLANDI**")
-    await call.answer("Kontakt foydalanuvchiga yuborildi!")
+    await call.answer("Tasdiqlandi!")
 
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_payment(call: types.CallbackQuery):
@@ -193,18 +177,19 @@ async def reject_payment(call: types.CallbackQuery):
     
     await bot.send_message(
         chat_id=user_id,
-        text="❌ To'lovingiz tasdiqlanmadi. Chek rasmini tekshirib qayta yuboring."
+        text="❌ To'lovingiz tasdiqlanmadi. Qayta tekshirib yuboring."
     )
     
     await call.message.edit_caption(caption=call.message.caption + "\n\n❌ **RAD ETILDI**")
-    await call.answer("To'lov rad etildi.")
+    await call.answer("Rad etildi!")
 
 # --- ADMIN BUYRUQLARI (/add, /list, /del) ---
 
-@dp.message(Command("add"))
+@dp.message(Command("add"), StateFilter('*'))
 async def add_start(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
+    await state.clear()
     await state.set_state(AddProfile.photo)
     await message.answer("📸 Yangi anketa uchun rasm yuboring:")
 
@@ -236,7 +221,6 @@ async def add_city(message: types.Message, state: FSMContext):
 async def add_contact(message: types.Message, state: FSMContext):
     data = await state.get_data()
     profiles.append({
-        "id": len(profiles) + 1,
         "photo": data["photo"],
         "name": data["name"],
         "age": data["age"],
@@ -244,46 +228,46 @@ async def add_contact(message: types.Message, state: FSMContext):
         "contact": message.text
     })
     await state.clear()
-    await message.answer("✅ Yangi anketa muvaffaqiyatli saqlandi!")
+    await message.answer("✅ Yangi anketa saqlandi!")
 
-@dp.message(Command("list"))
-async def list_profiles(message: types.Message):
+@dp.message(Command("list"), StateFilter('*'))
+async def list_profiles(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-        
+    await state.clear()
+    
     if not profiles:
         await message.answer("📁 Hozircha anketalar bazasi bo'sh.")
         return
     
     text = "📋 **Mavjud anketalar ro'yxati:**\n\n"
-    for p in profiles:
-        text += f"🆔 **ID: {p['id']}** | {p['name']}, {p['age']} yosh ({p['city']})\n"
+    for idx, p in enumerate(profiles, start=1):
+        text += f"️⃣ **{idx}** | {p['name']}, {p['age']} yosh ({p['city']})\n"
     
-    text += "\n🗑 O'chirish uchun buyruq: `/del 1` (ID raqamini yozing)"
+    text += "\n🗑 O'chirish uchun buyruq: `/del 1` (tartib raqamini yozing)"
     await message.answer(text, parse_mode="Markdown")
 
-@dp.message(Command("del"))
-async def delete_profile(message: types.Message):
+@dp.message(Command("del"), StateFilter('*'))
+async def delete_profile(message: types.Message, state: FSMContext):
     if message.from_user.id != ADMIN_ID:
         return
-        
+    await state.clear()
+    
     try:
         args = message.text.split()
         if len(args) < 2:
-            await message.answer("⚠️ O'chirish uchun ID yozing. Masalan: `/del 1`", parse_mode="Markdown")
+            await message.answer("⚠️ O'chirish uchun tartib raqamini yozing. Masalan: `/del 1`", parse_mode="Markdown")
             return
             
-        profile_id = int(args[1])
-        global profiles
-        initial_len = len(profiles)
-        profiles = [p for p in profiles if p["id"] != profile_id]
+        index_to_del = int(args[1]) - 1
         
-        if len(profiles) < initial_len:
-            await message.answer(f"✅ **ID: {profile_id}** bo'lgan anketa muvaffaqiyatli o'chirildi!")
+        if 0 <= index_to_del < len(profiles):
+            removed = profiles.pop(index_to_del)
+            await message.answer(f"✅ **{removed['name']}** anketasi muvaffaqiyatli o'chirildi!")
         else:
-            await message.answer(f"❌ **ID: {profile_id}** topilmadi.")
+            await message.answer("❌ Bunday tartib raqamli anketa topilmadi. `/list` deb yozib ko'ring.")
     except Exception as e:
-        await message.answer(f"⚠️ Xatolik yuz berdi: {str(e)}")
+        await message.answer(f"⚠️ Xatolik: `/del 1` ko'rinishida yuboring.")
 
 # --- WEB SERVER & POLLING ---
 
