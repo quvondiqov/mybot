@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardRemove
 
 BOT_TOKEN = "8981242781:AAEm3VckbN5yUziuUEUSw7Rhmov75hSiprk"
 ADMIN_ID = 8914547953
@@ -16,10 +16,10 @@ TAPS_USERNAME = "topkinone"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Anketalar bazasi va vaqtinchalik chek saqlagich
+# Anketalar bazasi
 profiles = []
-user_receipts = {}
 
+# Holatlar (States)
 class AddProfile(StatesGroup):
     photo = State()
     name = State()
@@ -27,15 +27,18 @@ class AddProfile(StatesGroup):
     city = State()
     contact = State()
 
+class UserReceipt(StatesGroup):
+    waiting_photo = State()
+
 # --- ADMIN BEKOR QILISH BUYRUG'I ---
-@dp.message(Command("cancel"))
+@dp.message(Command("cancel"), StateFilter('*'))
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.clear()
     await message.answer("❌ Amaliyot bekor qilindi.", reply_markup=ReplyKeyboardRemove())
 
 # --- USER QISMI ---
 
-@dp.message(CommandStart())
+@dp.message(CommandStart(), StateFilter('*'))
 async def start_cmd(message: types.Message, state: FSMContext):
     await state.clear()
     if not profiles:
@@ -114,32 +117,18 @@ async def handle_like(call: types.CallbackQuery, state: FSMContext):
     await call.message.answer(text, parse_mode="Markdown", reply_markup=kb)
     await call.answer()
 
+# CHEK YUBORISH KNOPKASI BOSILGANIDA
 @dp.callback_query(F.data == "send_receipt")
-async def start_receipt_upload(call: types.CallbackQuery):
-    await call.message.answer("📸 Chek rasmini yuklang va pastdagi **📥 Rasmni yuborish** tugmasini bosing:")
+async def start_receipt_upload(call: types.CallbackQuery, state: FSMContext):
+    await state.set_state(UserReceipt.waiting_photo)
+    await call.message.answer("📸 **Iltimos, to'lov cheki rasmini (skrinshotini) shu yerga yuboring:**")
     await call.answer()
 
-# FOYDALANUVCHI RASM YUBORGANIDA SINOV UCHUN SAQLAYMIZ
-@dp.message(F.photo)
-async def catch_photo(message: types.Message):
-    user_receipts[message.from_user.id] = message.photo[-1].file_id
+# FOYDALANUVCHI CHEK RASMINI YUBORGAN ZAHOTI ISHLAYDI
+@dp.message(UserReceipt.waiting_photo, F.photo)
+async def process_receipt_photo(message: types.Message, state: FSMContext):
+    photo_id = message.photo[-1].file_id
     
-    kb = ReplyKeyboardMarkup(
-        keyboard=[[KeyboardButton(text="📥 Rasmni yuborish")]],
-        resize_keyboard=True,
-        one_time_keyboard=True
-    )
-    await message.answer("✅ Rasm qabul qilindi! Uni adminga jo'natish uchun pastdagi tugmani bosing:", reply_markup=kb)
-
-# TUGMA BOSILGANDA ADMINGA YUBORISH
-@dp.message(F.text == "📥 Rasmni yuborish")
-async def send_receipt_to_admin(message: types.Message):
-    photo_id = user_receipts.get(message.from_user.id)
-    
-    if not photo_id:
-        await message.answer("⚠️ Oldin chek rasmini yuboring!", reply_markup=ReplyKeyboardRemove())
-        return
-
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_{message.from_user.id}"),
@@ -149,6 +138,7 @@ async def send_receipt_to_admin(message: types.Message):
     
     user_info = f"@{message.from_user.username}" if message.from_user.username else f"ID: {message.from_user.id}"
     
+    # Adminga rasm va tugmalarni yuborish
     await bot.send_photo(
         chat_id=ADMIN_ID,
         photo=photo_id,
@@ -161,10 +151,13 @@ async def send_receipt_to_admin(message: types.Message):
         reply_markup=admin_kb
     )
     
-    # Vaqtinchalik xotiradan o'chirish
-    del user_receipts[message.from_user.id]
-    
-    await message.answer("⏳ Chekingiz adminga yuborildi. Muvaffaqiyatli tekshirilsa, admin sizga kontaktni yuboradi.", reply_markup=ReplyKeyboardRemove())
+    await state.clear()
+    await message.answer("⏳ Chekingiz adminga muvaffaqiyatli yuborildi! Tekshirib bo'lingach, admin siz bilan bog'lanadi.")
+
+# MATN YUBORIB QO'YSA OGOHLANTIRISH
+@dp.message(UserReceipt.waiting_photo)
+async def process_receipt_not_photo(message: types.Message):
+    await message.answer("⚠️ Iltimos, faqat **rasm (skrinshot)** ko'rinishida yuboring!")
 
 # --- ADMIN TASDIQLASH QISMI ---
 
@@ -175,13 +168,15 @@ async def approve_payment(call: types.CallbackQuery):
         
     user_id = int(call.data.split("_")[1])
     
-    await bot.send_message(
-        chat_id=user_id,
-        text="✅ To'lovingiz tasdiqlandi! Admin siz bilan tez orada bog'lanadi yoki kontaktni yuboradi."
-    )
-    
-    await call.message.edit_caption(caption=call.message.caption + "\n\n✅ **TASDIQLANDI**")
-    await call.answer("Tasdiqlandi!")
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text="✅ To'lovingiz tasdiqlandi! Admin siz bilan tez orada bog'lanadi."
+        )
+        await call.message.edit_caption(caption=call.message.caption + "\n\n✅ **TASDIQLANDI**")
+        await call.answer("Tasdiqlandi!")
+    except Exception as e:
+        await call.answer(f"Xatolik: {e}", show_alert=True)
 
 @dp.callback_query(F.data.startswith("reject_"))
 async def reject_payment(call: types.CallbackQuery):
@@ -190,13 +185,15 @@ async def reject_payment(call: types.CallbackQuery):
         
     user_id = int(call.data.split("_")[1])
     
-    await bot.send_message(
-        chat_id=user_id,
-        text="❌ To'lovingiz tasdiqlanmadi. Qayta tekshirib yuboring."
-    )
-    
-    await call.message.edit_caption(caption=call.message.caption + "\n\n❌ **RAD ETILDI**")
-    await call.answer("Rad etildi!")
+    try:
+        await bot.send_message(
+            chat_id=user_id,
+            text="❌ To'lovingiz tasdiqlanmadi. Chek rasmini qayta tekshirib yuboring."
+        )
+        await call.message.edit_caption(caption=call.message.caption + "\n\n❌ **RAD ETILDI**")
+        await call.answer("Rad etildi!")
+    except Exception as e:
+        await call.answer(f"Xatolik: {e}", show_alert=True)
 
 # --- ADMIN BUYRUQLARI (/add, /list, /del) ---
 
