@@ -7,7 +7,7 @@ from aiogram.filters import CommandStart, Command, StateFilter
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.fsm.storage.memory import MemoryStorage
-from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
+from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, ReplyKeyboardMarkup, KeyboardButton, ReplyKeyboardRemove
 
 BOT_TOKEN = "8981242781:AAEm3VckbN5yUziuUEUSw7Rhmov75hSiprk"
 ADMIN_ID = 8914547953
@@ -16,8 +16,9 @@ TAPS_USERNAME = "topkinone"
 bot = Bot(token=BOT_TOKEN)
 dp = Dispatcher(storage=MemoryStorage())
 
-# Anketalar bazasi
+# Anketalar bazasi va vaqtinchalik chek saqlagich
 profiles = []
+user_receipts = {}
 
 class AddProfile(StatesGroup):
     photo = State()
@@ -26,14 +27,11 @@ class AddProfile(StatesGroup):
     city = State()
     contact = State()
 
-class UserState(StatesGroup):
-    waiting_receipt = State()
-
 # --- ADMIN BEKOR QILISH BUYRUG'I ---
 @dp.message(Command("cancel"))
 async def cancel_handler(message: types.Message, state: FSMContext):
     await state.clear()
-    await message.answer("❌ Amaliyot bekor qilindi.")
+    await message.answer("❌ Amaliyot bekor qilindi.", reply_markup=ReplyKeyboardRemove())
 
 # --- USER QISMI ---
 
@@ -117,16 +115,31 @@ async def handle_like(call: types.CallbackQuery, state: FSMContext):
     await call.answer()
 
 @dp.callback_query(F.data == "send_receipt")
-async def start_receipt_upload(call: types.CallbackQuery, state: FSMContext):
-    await state.set_state(UserState.waiting_receipt)
-    await call.message.answer("📸 To'lov cheki (skrinshot/rasm)ni yuboring:")
+async def start_receipt_upload(call: types.CallbackQuery):
+    await call.message.answer("📸 Chek rasmini yuklang va pastdagi **📥 Rasmni yuborish** tugmasini bosing:")
     await call.answer()
 
-# SODDALASHTIRILGAN CHEK QABUL QILISH
-@dp.message(UserState.waiting_receipt, F.photo)
-async def receive_receipt(message: types.Message, state: FSMContext):
-    photo_id = message.photo[-1].file_id
+# FOYDALANUVCHI RASM YUBORGANIDA SINOV UCHUN SAQLAYMIZ
+@dp.message(F.photo)
+async def catch_photo(message: types.Message):
+    user_receipts[message.from_user.id] = message.photo[-1].file_id
     
+    kb = ReplyKeyboardMarkup(
+        keyboard=[[KeyboardButton(text="📥 Rasmni yuborish")]],
+        resize_keyboard=True,
+        one_time_keyboard=True
+    )
+    await message.answer("✅ Rasm qabul qilindi! Uni adminga jo'natish uchun pastdagi tugmani bosing:", reply_markup=kb)
+
+# TUGMA BOSILGANDA ADMINGA YUBORISH
+@dp.message(F.text == "📥 Rasmni yuborish")
+async def send_receipt_to_admin(message: types.Message):
+    photo_id = user_receipts.get(message.from_user.id)
+    
+    if not photo_id:
+        await message.answer("⚠️ Oldin chek rasmini yuboring!", reply_markup=ReplyKeyboardRemove())
+        return
+
     admin_kb = InlineKeyboardMarkup(inline_keyboard=[
         [
             InlineKeyboardButton(text="✅ Tasdiqlash", callback_data=f"approve_{message.from_user.id}"),
@@ -148,8 +161,10 @@ async def receive_receipt(message: types.Message, state: FSMContext):
         reply_markup=admin_kb
     )
     
-    await state.clear()
-    await message.answer("⏳ Chekingiz adminga yuborildi. Muvaffaqiyatli tekshirilsa, admin sizga kontaktni yuboradi.")
+    # Vaqtinchalik xotiradan o'chirish
+    del user_receipts[message.from_user.id]
+    
+    await message.answer("⏳ Chekingiz adminga yuborildi. Muvaffaqiyatli tekshirilsa, admin sizga kontaktni yuboradi.", reply_markup=ReplyKeyboardRemove())
 
 # --- ADMIN TASDIQLASH QISMI ---
 
